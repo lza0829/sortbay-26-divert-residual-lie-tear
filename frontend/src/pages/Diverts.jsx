@@ -10,11 +10,17 @@ export default function Diverts() {
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [replay, setReplay] = useState(null)
+  const [fateBoard, setFateBoard] = useState(null)
+
+  const loadFate = async () => {
+    try { setFateBoard(await api('/回流关联/对账')) } catch { /* 旧后端无此口时静默 */ }
+  }
 
   const load = async (preferredScanId = '') => {
     const [bs, ss] = await Promise.all([api('/回流批次'), api('/扫描')])
     setBatches(bs)
     setScans(ss)
+    loadFate()
     const wanted = preferredScanId || scanId
     if (wanted && ss.some((x) => String(x.id) === String(wanted) && (x.status === '已路由' || x.status === '已入袋'))) {
       setScanId(String(wanted))
@@ -49,6 +55,17 @@ export default function Diverts() {
         body: JSON.stringify(dest ? { 目的地码: dest, dest_code: dest } : {}),
       })
       setMsg(`扫描 ${id} 已再裁决回路由态`)
+      await load()
+    } catch (e) {
+      setErr(e.message)
+    }
+  }
+
+  const rollbackHalf = async (id) => {
+    setErr(''); setMsg('')
+    try {
+      await api(`/回流关联/${id}/回滚`, { method: 'POST', body: JSON.stringify({}) })
+      setMsg(`扫描 ${id} 的半截回流已整笔回滚，关联/批次/口门恢复同命运`)
       await load()
     } catch (e) {
       setErr(e.message)
@@ -101,18 +118,38 @@ export default function Diverts() {
       </div>
 
       <h3>待再裁决错分件</h3>
+      {fateBoard && fateBoard.缺口件数 > 0 && (
+        <div className="err" data-testid="reflow-fate-banner" data-frozen={fateBoard.冻结宣称件数 ?? 0}>
+          关联缺口 {fateBoard.缺口件数} 件 · 冻结回流宣称 {fateBoard.冻结宣称件数 ?? 0} 件 ·
+          全局同命运：{fateBoard.全局同命运 ? '是' : '否'}。缺口未清前再裁决入口已冻结，禁止假装可再落入。
+        </div>
+      )}
       <table data-testid="divert-open-list">
         <thead>
-          <tr><th>扫描</th><th>条码</th><th>原口门</th><th>原袋关联</th><th>回流批次</th><th>再裁决入口</th><th>重放</th></tr>
+          <tr><th>扫描</th><th>条码</th><th>原口门</th><th>原袋关联</th><th>回流批次</th><th>关联命运/缺口</th><th>再裁决入口</th><th>补偿</th><th>重放</th></tr>
         </thead>
         <tbody>
-          {wrongScans.map((s) => (
-            <tr key={s.id} className="row-divert">
+          {wrongScans.map((s) => {
+            const fateOpen = s.可再裁决 !== false
+            const frozen = s.冻结已回流宣称 === true || s.claim_frozen === true
+            const gaps = s.gap_codes || s.缺口码列表 || []
+            const fateOk = s.同命运 === true || s.same_fate === true
+            return (
+            <tr key={s.id} className={`row-divert ${frozen ? 'row-fate-frozen' : ''}`} data-frozen={frozen ? 'true' : 'false'}>
               <td>{s.id}</td>
               <td>{s.barcode}</td>
               <td>{s.原口门码 || s.口门码 || s.original_chute_id || '-'}</td>
               <td>{s.original_bag_id ? `原袋 ${s.原袋码 || s.original_bag_id}（已作废留痕）` : '无袋'}</td>
               <td>{s.回流批次号 || s.divert_batch_id}</td>
+              <td data-testid={`divert-fate-${s.id}`} data-same-fate={fateOk ? 'true' : 'false'}>
+                {fateOk
+                  ? <span className="ok-text" data-testid={`divert-fate-ok-${s.id}`}>同命运一致</span>
+                  : (
+                    <span className="err" data-testid={`divert-fate-gap-${s.id}`}>
+                      {frozen ? '已冻结宣称；' : ''}关联缺口：{gaps.join('、') || '命运不一致'}
+                    </span>
+                  )}
+              </td>
               <td>
                 <span className="inline-action">
                   <input
@@ -127,11 +164,27 @@ export default function Diverts() {
                     data-testid={`divert-readjudicate-${s.id}`}
                     data-action="readjudicate"
                     data-scan-id={s.id}
+                    data-open={fateOpen ? 'true' : 'false'}
+                    disabled={!fateOpen}
+                    title={fateOpen ? '' : '回流关联账未清：再裁决入口已冻结，请先回滚/核销缺口'}
                     onClick={() => readjudicate(s.id)}
                   >
                     再裁决
                   </button>
                 </span>
+              </td>
+              <td>
+                {!fateOk && (
+                  <button
+                    type="button"
+                    className="danger"
+                    data-testid={`divert-rollback-${s.id}`}
+                    data-action="rollback-half"
+                    onClick={() => rollbackHalf(s.id)}
+                  >
+                    半截回滚
+                  </button>
+                )}
               </td>
               <td>
                 <button
@@ -144,8 +197,9 @@ export default function Diverts() {
                 </button>
               </td>
             </tr>
-          ))}
-          {wrongScans.length === 0 && <tr><td colSpan="7" className="muted">暂无错分桶待裁决件</td></tr>}
+            )
+          })}
+          {wrongScans.length === 0 && <tr><td colSpan="9" className="muted">暂无错分桶待裁决件</td></tr>}
         </tbody>
       </table>
 
@@ -174,7 +228,16 @@ export default function Diverts() {
       {replay && (
         <div className="replay-box" data-testid="replay-box">
           <h3>审计重放 · 扫描 {replay.扫描编号}</h3>
-          <p>重放一致：<strong>{replay.重放一致 ? '是' : '否'}</strong>；事件 {replay.事件?.length || 0} 条；占用净额 {replay.占用事件净额}</p>
+          <p>
+            重放一致：<strong>{replay.重放一致 ? '是' : '否'}</strong>；
+            回流关联同命运：<strong>{replay.同命运 ? '是' : '否'}</strong>；
+            事件 {replay.事件?.length || 0} 条；占用净额 {replay.占用事件净额}
+          </p>
+          {Array.isArray(replay.缺口) && replay.缺口.length > 0 && (
+            <p className="err" data-testid="replay-gaps">
+              关联缺口：{replay.缺口.map((g) => g.code || g.缺口码).join('、')}
+            </p>
+          )}
           <pre>{JSON.stringify(replay.一致性, null, 2)}</pre>
         </div>
       )}

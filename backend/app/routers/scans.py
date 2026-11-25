@@ -1,5 +1,4 @@
 from __future__ import annotations
-from app.services import ledger_skew
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +12,7 @@ from app.services.ledger import (
     list_scans,
     overview_snapshot,
 )
+from app.services.reflow_fate import association_fate, record_gaps
 
 router = APIRouter(tags=["过机扫描"])
 
@@ -80,6 +80,9 @@ def get_scan_api(scan_id: int):
         scan = get_scan(conn, scan_id)
         if not scan:
             raise HTTPException(404, "扫描不存在")
+        fate = scan.get("关联命运") if isinstance(scan, dict) else None
+        if fate is not None:
+            record_gaps(conn, fate, source="扫描详情")
         return scan
 
 
@@ -174,6 +177,23 @@ def route_scan_command(scan_id: int, body: RouteIn | None = None):
         old_status = scan["status"]
         if old_status not in ("待路由", "错分回流"):
             raise HTTPException(400, f"当前状态不可路由/再裁决: {old_status}")
+
+        # 裁决入口不得在关联账撕裂时假装可再落入，否则会写出幽灵 +1 占口。
+        if old_status == "错分回流":
+            fate = association_fate(conn, scan)
+            if not fate.get("可再裁决"):
+                record_gaps(conn, fate, source="裁决入口拦截")
+                # 先把可核缺口账与审计流水落盘，再回滚本次裁决（裁决尚未写任何账）。
+                conn.commit()
+                codes = "、".join(fate.get("gap_codes") or []) or "ASSOCIATION_FATE_TORN"
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "回流关联账未清（关联缺口/同命运不一致），已冻结再裁决入口与已回流宣称，"
+                        f"不能假装可再落入或再裁决：缺口={codes}；"
+                        "请先对照重放/回流关联对账并回滚或核销缺口"
+                    ),
+                )
 
         chute = None
         if requested_chute is not None:

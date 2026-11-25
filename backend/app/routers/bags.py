@@ -166,6 +166,21 @@ def add_to_bag(bag_id: int, body: BagAddIn):
             )
         if scan["status"] != "已路由":
             raise HTTPException(400, "仅已路由件可入袋")
+        # 幽灵再路由残态（回流批次仍挂载、无再裁决账却自己回到已路由）不得从
+        # 封袋入口被静默收成已入袋，否则又造一条与回流命运撕裂的关联。
+        if scan["divert_batch_id"] is not None:
+            from app.services.reflow_fate import association_fate, record_gaps
+
+            fate = association_fate(conn, scan)
+            if fate.get("幽灵再路由") or not fate.get("同命运"):
+                record_gaps(conn, fate, source="封袋入口拦截")
+                conn.commit()
+                codes = "、".join(fate.get("gap_codes") or []) or "ASSOCIATION_FATE_TORN"
+                raise HTTPException(
+                    409,
+                    "该件回流关联账未清（幽灵再路由/同命运不一致），封袋入口不得假装可正常入袋："
+                    f"缺口={codes}；请先再裁决记账或回滚半截回流",
+                )
         if scan["chute_id"] != bag["chute_id"]:
             raise HTTPException(400, "扫描口门与袋口门不一致")
 

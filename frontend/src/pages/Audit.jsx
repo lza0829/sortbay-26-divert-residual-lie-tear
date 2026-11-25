@@ -58,7 +58,16 @@ export default function Audit() {
       {replay && (
         <div className="replay-box" data-testid="audit-replay-detail">
           <h3>重放结果 · 扫描 {replay.扫描编号}</h3>
-          <p>重放一致：<strong>{replay.重放一致 ? '是' : '否'}</strong></p>
+          <p>
+            重放一致：<strong>{replay.重放一致 ? '是' : '否'}</strong>
+            {' '}· 回流关联同命运：
+            <strong data-testid="audit-replay-fate">{replay.同命运 ? '是' : '否'}</strong>
+          </p>
+          {Array.isArray(replay.缺口) && replay.缺口.length > 0 && (
+            <p className="err" data-testid="audit-replay-gaps">
+              关联缺口：{replay.缺口.map((g) => g.code || g.缺口码).join('、')}
+            </p>
+          )}
           <pre>{JSON.stringify({ 一致性: replay.一致性, 最新检出结局: replay.最新检出结局, 事件: replay.事件?.map((e) => ({ id: e.id, type: e.event_type, payload: e.payload })) }, null, 2)}</pre>
         </div>
       )}

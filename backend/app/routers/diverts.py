@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from app.db import db, rows_to_list, write_db
 from app.services.divert import build_detect_result, detect_scan
 from app.services.ledger import POLICY, overview_snapshot, replay_scan
+from app.services.reflow_fate import association_fate, batch_fate
 
 router = APIRouter(tags=["错分回流"])
 
@@ -68,6 +69,17 @@ def list_batches():
             row["批次号"] = row.get("code")
             row["batch_code"] = row.get("code")
             row["batch_no"] = row.get("code")
+            # 批次册必须与扫描关联位/口门/裁决入口同命运，不许批次行独自发绿。
+            bf = batch_fate(conn, row.get("id"))
+            row["批次同命运"] = bf.get("批次同命运")
+            row["同命运"] = bf.get("同命运")
+            row["same_fate"] = bf.get("same_fate")
+            row["fate_consistent"] = bf.get("same_fate")
+            row["批次缺口码列表"] = bf.get("缺口码列表") or []
+            row["缺口码列表"] = bf.get("缺口码列表") or []
+            row["可再裁决"] = bf.get("可再裁决")
+            if bf.get("已回滚"):
+                row["已回滚"] = True
         return result
 
 
@@ -109,8 +121,20 @@ def get_batch(batch_id: int):
                 (batch_id,),
             ).fetchall()
         ]
+        for srow in scans:
+            fate = association_fate(conn, srow)
+            srow["关联命运"] = fate
+            srow["同命运"] = fate.get("同命运")
+            srow["可再裁决"] = fate.get("可再裁决")
+            srow["gap_codes"] = fate.get("gap_codes")
         result["扫描"] = scans
         result["scans"] = scans
+        bf = batch_fate(conn, batch_id)
+        result["批次同命运"] = bf.get("批次同命运")
+        result["同命运"] = bf.get("同命运")
+        result["same_fate"] = bf.get("same_fate")
+        result["缺口码列表"] = bf.get("缺口码列表") or []
+        result["关联命运"] = bf.get("关联命运") or bf
         return result
 
 

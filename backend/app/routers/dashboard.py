@@ -1,6 +1,4 @@
 from __future__ import annotations
-from app.services import divert_surface
-from app.services import ledger_skew
 
 from fastapi import APIRouter
 
@@ -14,33 +12,11 @@ router = APIRouter(tags=["总览"])
 @router.get("/overview")
 @router.get("/dashboard")
 def overview():
+    # 唯一事实源：总览回流格/分布/口门/关联命运全部来自当前落账状态实时重放，
+    # 不再允许 settings.surface_last 旁路粉刷成功灯或分布。
     with db() as conn:
         return overview_snapshot(conn)
 
-_overview_impl = overview
-
-
-def overview():
-    base = _overview_impl()
-    try:
-        from app.db import db
-        with db() as conn:
-            return divert_surface.overlay_overview(base, conn)
-    except Exception:
-        return divert_surface.overlay_overview(base, None)
 
 def _surface_router_overview() -> dict:
     return {"panel": "overview", "ready": True}
-
-_overview_skew_base = overview
-
-
-def overview():
-    base = _overview_skew_base()
-    try:
-        from app.db import db
-        with db() as conn:
-            return ledger_skew.skew_overview(base, conn)
-    except Exception:
-        return base
-

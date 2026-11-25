@@ -5,6 +5,9 @@ function ScanRow({ row, busy, onAction }) {
   const [dest, setDest] = useState(row.dest_code || '')
   const wrong = row.status === '错分回流'
   const detectable = row.status === '已路由' || row.status === '已入袋'
+  const fateOpen = row.可再裁决 !== false
+  const fateOk = row.同命运 === true || row.same_fate === true
+  const gapCodes = row.gap_codes || row.缺口码列表 || []
   return (
     <tr data-testid={`scan-row-${row.id}`} className={wrong ? 'row-divert' : ''}>
       <td>{row.id}</td>
@@ -51,6 +54,11 @@ function ScanRow({ row, busy, onAction }) {
         )}
         {wrong && (
           <span className="inline-action">
+            {!fateOk && (
+              <span className="err" data-testid={`scan-fate-gap-${row.id}`} title={(row.缺口文案 || gapCodes.join('、') || '回流关联命运不一致')}>
+                关联缺口{gapCodes.length ? `：${gapCodes.join('、')}` : ''}（入口冻结）
+              </span>
+            )}
             <input
               aria-label={`再裁决目的地-${row.id}`}
               data-testid={`readjudicate-input-${row.id}`}
@@ -64,11 +72,25 @@ function ScanRow({ row, busy, onAction }) {
               data-testid={`readjudicate-${row.id}`}
               data-action="readjudicate"
               data-scan-id={row.id}
-              disabled={busy}
+              data-open={fateOpen ? 'true' : 'false'}
+              disabled={busy || !fateOpen}
+              title={fateOpen ? '' : '回流关联账未清，再裁决入口已冻结；请先回滚半截回流或核销关联缺口'}
               onClick={() => onAction('readjudicate', row.id, { 目的地码: dest || undefined })}
             >
               再裁决（路由）
             </button>
+            {!fateOk && (
+              <button
+                type="button"
+                className="danger"
+                data-testid={`scan-rollback-${row.id}`}
+                data-action="rollback-half"
+                disabled={busy}
+                onClick={() => onAction('rollback', row.id)}
+              >
+                半截回滚
+              </button>
+            )}
           </span>
         )}
       </td>
@@ -107,6 +129,9 @@ export default function Scans() {
         const result = await api('/错分检出', { method: 'POST', body: JSON.stringify({ 扫描编号: id }) })
         const r = result.回执 || {}
         setMsg(`错分检出成功：${r.回流批次号 || ''}；原口门在口=${r.原口门在口 ?? ''}；${r.原袋编号 ? '原袋关联已作废留痕' : '无原袋'}；总览错分桶=${result.总览?.错分桶数量 ?? ''}`)
+      } else if (kind === 'rollback') {
+        await api(`/回流关联/${id}/回滚`, { method: 'POST', body: JSON.stringify({}) })
+        setMsg('半截回流已整笔回滚：扫描/批次/关联/口门恢复同命运')
       } else {
         await api(`/扫描/${id}/再裁决`, { method: 'POST', body: JSON.stringify(body || {}) })
         setMsg('再裁决成功：已回到新口门，可继续入袋封袋')

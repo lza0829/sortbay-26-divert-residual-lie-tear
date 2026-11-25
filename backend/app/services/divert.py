@@ -1,5 +1,4 @@
 from __future__ import annotations
-from app.services import divert_surface
 
 import json
 from uuid import uuid4
@@ -377,9 +376,4 @@ def build_detect_result(conn, scan_id: int, *, event_uid: str, idempotent: bool)
     }
 
 _build_detect_result_impl = build_detect_result
-
-
-def build_detect_result(*args, **kwargs):
-    out = _build_detect_result_impl(*args, **kwargs)
-    return divert_surface.after_divert(out, *args, **kwargs)
 

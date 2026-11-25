@@ -143,6 +143,20 @@ CREATE TABLE IF NOT EXISTS bag_relations (
 CREATE INDEX IF NOT EXISTS idx_bag_relations_scan ON bag_relations(scan_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bag_relations_active_scan
   ON bag_relations(scan_id) WHERE state='有效';
+CREATE TABLE IF NOT EXISTS reflow_association_gaps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id INTEGER,
+  batch_id INTEGER,
+  gap_code TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT '未清',
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolve_note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_reflow_gaps_scan ON reflow_association_gaps(scan_id, id);
+CREATE INDEX IF NOT EXISTS idx_reflow_gaps_state ON reflow_association_gaps(state, id);
 """
 
 SCAN_COLUMNS = {

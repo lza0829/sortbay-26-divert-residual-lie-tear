@@ -28,6 +28,10 @@ export default function Shifts() {
           <div className={`stat ${rec.对账一致 ? 'ok-stat' : 'bad-stat'}`}><div className="n">{rec.错分桶数 ?? 0}</div><div className="l">错分桶 / 对账{rec.对账一致 ? '一致' : '有差异'}</div></div>
           <div className="stat"><div className="n">{rec.错分检出事件数 ?? 0}</div><div className="l">错分检出事件</div></div>
           <div className="stat"><div className="n">{rec.再裁决事件数 ?? 0}</div><div className="l">再裁决事件</div></div>
+          <div className={`stat ${(rec.回流关联缺口件数 ?? rec.关联缺口件数 ?? 0) > 0 ? 'bad-stat' : 'ok-stat'}`} data-testid="shift-fate-gaps">
+            <div className="n">{rec.回流关联缺口件数 ?? rec.关联缺口件数 ?? 0}</div>
+            <div className="l">回流关联缺口 / 冻结宣称 {rec.冻结回流宣称件数 ?? 0}</div>
+          </div>
         </div>
       )}
       {rec && rec.差异?.length > 0 && (

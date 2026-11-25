@@ -7,6 +7,11 @@ from uuid import uuid4
 
 from app.db import row_to_dict, rows_to_list
 from app.services.common import now_str
+from app.services.reflow_fate import (
+    association_fate,
+    global_fate_summary,
+    record_gaps,
+)
 
 # 全局唯一口径：检出立即扣减原口门在口；活动袋关联在同一事务内作废，
 # 但原袋/批次/事件留痕保留，并继续开放“再裁决”。
@@ -56,7 +61,7 @@ JOIN lines l ON l.id = c.line_id
 """
 
 
-def augment_scan(row: sqlite3.Row | dict | None) -> dict | None:
+def augment_scan(row: sqlite3.Row | dict | None, conn=None) -> dict | None:
     if row is None:
         return None
     item = row_to_dict(row) if isinstance(row, sqlite3.Row) else dict(row)
@@ -86,14 +91,88 @@ def augment_scan(row: sqlite3.Row | dict | None) -> dict | None:
     item["divert_batch_code"] = item.get("回流批次号")
     item["原袋关联状态"] = relation
     item["关联状态"] = relation
-    item["可再裁决"] = status == "错分回流"
-    item["readjudication_open"] = status == "错分回流"
-    item["错分检出入口"] = f"/api/扫描/{item['id']}/错分检出" if status in ("已路由", "已入袋") else None
-    item["再裁决入口"] = f"/api/扫描/{item['id']}/再裁决" if status == "错分回流" else None
+
+    # 回流关联命运：裁决入口只听“批次∪关联位∪口门”同命运这一套口径。
+    if conn is not None:
+        fate = association_fate(conn, item)
+    else:
+        # 无连接时的保守稀疏判定：关联已丢（无批次）或活动袋位未清，不得假装可裁决。
+        sparse_open = (
+            status == "错分回流"
+            and item.get("divert_batch_id") is not None
+            and not bag_id
+        )
+        fate = {
+            "可再裁决": sparse_open,
+            "readjudication_open": sparse_open,
+            "同命运": True,
+            "gaps": [],
+            "缺口": [],
+            "关联缺口": [],
+            "有缺口": False,
+            "冻结已回流宣称": False,
+            "same_fate": True,
+        }
+    adjudication_open = bool(fate.get("可再裁决"))
+    item["可再裁决"] = adjudication_open
+    item["readjudication_open"] = adjudication_open
+    item["adjudication_open"] = adjudication_open
+    item["裁决入口可落入"] = adjudication_open
+    item["再裁决入口"] = f"/api/扫描/{item['id']}/再裁决" if adjudication_open else None
     item["readjudication_endpoint"] = item["再裁决入口"]
+    item["裁决入口"] = item["再裁决入口"]
+    item["错分检出入口"] = f"/api/扫描/{item['id']}/错分检出" if status in ("已路由", "已入袋") else None
     item["重放入口"] = f"/api/错分检出/{item['id']}/重放" if item.get("divert_batch_id") else None
     item["replay_url"] = f"/api/diverts/{item['id']}/replay" if item.get("divert_batch_id") else None
     item["replay_endpoint"] = item["重放入口"]
+
+    # 把同命运/缺口结论平铺到扫描册与详情，便于各定位面同刷。
+    item["关联命运"] = fate
+    item["fate"] = fate
+    item["回流关联"] = fate
+    for key in (
+        "同命运",
+        "same_fate",
+        "fate_consistent",
+        "回流关联一致",
+        "关联命运一致",
+        "association_consistent",
+        "reflow_consistent",
+        "缺口",
+        "关联缺口",
+        "回流关联缺口",
+        "gaps",
+        "gap_codes",
+        "缺口码列表",
+        "缺口文案",
+        "有缺口",
+        "has_gap",
+        "缺口数",
+        "gap_count",
+        "冻结已回流宣称",
+        "claim_frozen",
+        "frozen",
+        "回流宣称冻结",
+        "幽灵再路由",
+        "ghost_reroutable",
+        "可再路由关联位",
+        "routable_association",
+        "association_gaps",
+        "reflow_gaps",
+        "open_gaps",
+        "gap_code_list",
+        "gap_labels",
+        "open_gap_count",
+        "same_destiny",
+        "consistent_fate",
+        "can_readjudicate",
+        "readjudicable",
+        "can_adjudicate",
+        "adjudication_allowed",
+        "frozen_claim",
+    ):
+        if key in fate:
+            item[key] = fate[key]
     return item
 
 
@@ -116,12 +195,12 @@ def list_scans(conn: sqlite3.Connection, status: str | None = None) -> list[dict
         ).fetchall()
     else:
         rows = conn.execute(SCAN_SELECT + " ORDER BY s.id DESC LIMIT 500").fetchall()
-    return [augment_scan(r) for r in rows]
+    return [augment_scan(r, conn) for r in rows]
 
 
 def get_scan(conn: sqlite3.Connection, scan_id: int) -> dict | None:
     row = conn.execute(SCAN_SELECT + " WHERE s.id=?", (scan_id,)).fetchone()
-    return augment_scan(row)
+    return augment_scan(row, conn)
 
 
 def find_scan_by_barcode(conn: sqlite3.Connection, barcode: str) -> dict | None:
@@ -133,7 +212,7 @@ def find_scan_by_barcode(conn: sqlite3.Connection, barcode: str) -> dict | None:
         """,
         (barcode,),
     ).fetchone()
-    return augment_scan(row)
+    return augment_scan(row, conn)
 
 
 def list_chutes(conn: sqlite3.Connection) -> list[dict]:
@@ -309,7 +388,7 @@ def overview_snapshot(conn: sqlite3.Connection) -> dict:
     chutes = list_chutes(conn)
     wrong_count = int(counts.get("错分回流", 0))
     wrong_items = [
-        augment_scan(r)
+        augment_scan(r, conn)
         for r in conn.execute(
             SCAN_SELECT + " WHERE s.status='错分回流' ORDER BY s.id DESC LIMIT 50"
         ).fetchall()
@@ -324,6 +403,17 @@ def overview_snapshot(conn: sqlite3.Connection) -> dict:
         "active": wrong_count > 0,
         "扫描": wrong_items,
     }
+    fate_summary = global_fate_summary(conn)
+    gap_count = int(fate_summary.get("缺口件数") or 0)
+    frozen_count = int(fate_summary.get("冻结宣称件数") or 0)
+    bucket.update(
+        {
+            "关联缺口件数": gap_count,
+            "冻结宣称件数": frozen_count,
+            "同命运": gap_count == 0,
+            "关联命运一致": gap_count == 0,
+        }
+    )
     return {
         "班次": row_to_dict(shift),
         "分布": counts,
@@ -334,6 +424,13 @@ def overview_snapshot(conn: sqlite3.Connection) -> dict:
         "divert_count": wrong_count,
         "错分桶亮": wrong_count > 0,
         "divert_bucket_lit": wrong_count > 0,
+        "回流关联": fate_summary,
+        "reflow_association": fate_summary,
+        "关联命运总览": fate_summary,
+        "回流关联缺口数": gap_count,
+        "关联缺口数": gap_count,
+        "冻结回流宣称数": frozen_count,
+        "全局同命运": gap_count == 0,
         "policy": POLICY,
         "口径": POLICY["口径"],
     }
@@ -414,6 +511,15 @@ def replay_scan(conn: sqlite3.Connection, scan_id: int) -> dict:
         "无活动双袋关联": sum(1 for r in relations if r.get("state") == "有效") <= 1,
         "检出必有批次": current.get("status") != "错分回流" or current.get("divert_batch_id") is not None,
     }
+    fate = association_fate(conn, current) if current else None
+    if fate is not None:
+        # 回流批次∪扫描关联位∪口门清空∪裁决入口必须同命运，重放才算一致。
+        consistency["回流关联同命运"] = bool(fate.get("同命运"))
+        consistency["关联缺口为零"] = not fate.get("有缺口")
+        for check_name, ok in (fate.get("checks") or {}).items():
+            consistency[f"命运核对·{check_name}"] = bool(ok)
+        # 重放观察到的撕裂落可核缺口账（同缺口幂等，仅首次写审计）。
+        record_gaps(conn, fate, source="重放对账")
     consistent = all(consistency.values()) and scan is not None
     result = {
         "扫描编号": scan_id,
@@ -437,7 +543,13 @@ def replay_scan(conn: sqlite3.Connection, scan_id: int) -> dict:
         "ok": consistent,
         "一致性": consistency,
         "consistency": consistency,
-        "口径": POLICY,
+        "关联命运": fate,
+        "fate": fate,
+        "回流关联": fate,
+        "同命运": (fate or {}).get("同命运", consistent),
+        "关联缺口": (fate or {}).get("关联缺口", []),
+        "缺口": (fate or {}).get("缺口", []),
         "policy": POLICY,
+        "口径": POLICY,
     }
     return result

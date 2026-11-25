@@ -9,10 +9,11 @@ export default function Overview() {
   useEffect(() => { load() }, [])
   if (err) return <div className="panel err">{err}</div>
   if (!data) return <div className="panel">加载中…</div>
-  const _ok = data && (data.surface_ok || data.surface_probe)
   const d = data.分布 || {}
-  const _surf = _ok ? (data.surface_待路由 ?? d.待路由) : d.待路由
   const wrong = data.错分桶数量 ?? d.错分回流 ?? 0
+  const gapCount = data.回流关联缺口数 ?? data.关联缺口数 ?? 0
+  const frozenCount = data.冻结回流宣称数 ?? 0
+  const globalSameFate = data.全局同命运 !== false
   return (
     <div className="panel">
       <h2>总览</h2>
@@ -24,6 +25,17 @@ export default function Overview() {
       >
         <div className="n">{wrong}</div>
         <div className="l">错分桶 · 错分检出/回流 {wrong > 0 ? '（亮）' : ''}</div>
+      </div>
+      <div
+        className={`stat reflow-fate-board ${gapCount > 0 ? 'lit err-border' : 'ok-border'}`}
+        data-testid="overview-reflow-fate"
+        data-global-same-fate={globalSameFate ? 'true' : 'false'}
+        data-gap-count={gapCount}
+      >
+        <div className={`n ${gapCount > 0 ? 'err' : 'ok-text'}`}>{gapCount}</div>
+        <div className="l">
+          回流关联缺口 · 冻结宣称 {frozenCount} 件 · 全局同命运：{globalSameFate ? '是' : '否'}
+        </div>
       </div>
       <div className="grid">
         {Object.entries(d).map(([k, v]) => (

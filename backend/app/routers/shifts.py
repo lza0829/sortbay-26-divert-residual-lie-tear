@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from app.db import db, rows_to_list, row_to_dict, write_db
 from app.services.common import audit, now_str
+from app.services.reflow_fate import global_fate_summary, record_gaps
 
 router = APIRouter(tags=["班次"])
 
@@ -164,6 +165,11 @@ def reconcile(
                 and row["检出事件未丢失"]
             )
         barcode_dest_mismatch_n = sum(1 for r in barcode_dest_reconciliation if not r["对账行一致"])
+        fate_summary = global_fate_summary(conn)
+        for fate in fate_summary.get("缺口明细") or []:
+            record_gaps(conn, fate, source="班次对账")
+        fate_gap_n = int(fate_summary.get("缺口件数") or 0)
+        fate_frozen_n = int(fate_summary.get("冻结宣称件数") or 0)
         differences = []
         if int(occupancy_delta) != int(current_occupancy):
             differences.append("口门占用事件净额与当前在口件数不一致")
@@ -175,6 +181,8 @@ def reconcile(
             differences.append("存在缺少错分检出事件的扫描")
         if barcode_dest_mismatch_n:
             differences.append("分拣线集包条码目的地对账存在丢事件或集包口门不一致")
+        if fate_gap_n:
+            differences.append("存在回流批次/扫描关联位/口门清空/裁决入口不同命运的回流关联缺口件")
         return {
             "班次": row_to_dict(shift),
             "扫描总数": scan_n,
@@ -194,6 +202,12 @@ def reconcile(
             "条码目的地对账": barcode_dest_reconciliation,
             "barcode_destination_reconciliation": barcode_dest_reconciliation,
             "条码目的地差异数": barcode_dest_mismatch_n,
+            "回流关联对账": fate_summary,
+            "reflow_association": fate_summary,
+            "回流关联缺口件数": fate_gap_n,
+            "关联缺口件数": fate_gap_n,
+            "冻结回流宣称件数": fate_frozen_n,
+            "全局同命运": fate_gap_n == 0,
             "差异": differences,
             "对账一致": not differences,
         }
